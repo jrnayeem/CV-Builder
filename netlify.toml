@@ -1,0 +1,30 @@
+[build]
+  command = "npm run build"
+  publish = "dist/public"
+
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+
+[[redirects]]
+  from = "/api/cv/generate-from-job"
+  to = "/.netlify/functions/cv-generate"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/api/cv/score"
+  to = "/.netlify/functions/cv-score"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/api/cv/cover-letter"
+  to = "/.netlify/functions/cv-cover-letter"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
