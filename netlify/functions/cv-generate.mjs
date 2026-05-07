@@ -1,5 +1,4 @@
-// Netlify serverless function (ESM JavaScript - no TypeScript required)
-// Route: POST /api/cv/generate-from-job  →  /.netlify/functions/cv-generate
+// netlify/functions/cv-generate.js
 
 async function callOpenAI(apiKey, messages) {
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -8,70 +7,118 @@ async function callOpenAI(apiKey, messages) {
       "Content-Type": "application/json",
       Authorization: `Bearer ${apiKey}`,
     },
-    body: JSON.stringify({ model: "gpt-4o-mini", max_tokens: 1500, messages }),
+    body: JSON.stringify({
+      model: "gpt-4o-mini",
+      max_tokens: 1500,
+      messages,
+    }),
   });
+
+  const text = await res.text();
+
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
     throw new Error(`OpenAI error ${res.status}: ${text}`);
   }
-  const data = await res.json();
-  return data.choices?.[0]?.message?.content ?? "{}";
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    return JSON.parse(text);
+  }
 }
 
 export const handler = async (event) => {
   if (event.httpMethod !== "POST") {
-    return { statusCode: 405, body: JSON.stringify({ error: "Method not allowed" }) };
+    return {
+      statusCode: 405,
+      body: JSON.stringify({ error: "Method not allowed" }),
+    };
   }
 
   const apiKey = process.env.OPENAI_API_KEY;
+
   if (!apiKey) {
     return {
-      statusCode: 503,
+      statusCode: 500,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        error: "AI features are not configured yet. To enable them:\n1. Go to Netlify dashboard → Site settings → Environment variables\n2. Add OPENAI_API_KEY with your key from platform.openai.com/api-keys\n3. Trigger a redeploy",
-        setup_required: true,
+        error: "Missing OPENAI_API_KEY in Netlify environment variables",
       }),
     };
   }
 
   let body;
-  try { body = JSON.parse(event.body || "{}"); } catch { body = {}; }
+  try {
+    body = JSON.parse(event.body || "{}");
+  } catch {
+    return {
+      statusCode: 400,
+      body: JSON.stringify({ error: "Invalid JSON body" }),
+    };
+  }
 
   const { jobDescription, currentCV } = body;
-  if (!jobDescription || String(jobDescription).trim().length < 20) {
-    return { statusCode: 400, body: JSON.stringify({ error: "Please provide a longer job description." }) };
+
+  if (!jobDescription || jobDescription.trim().length < 20) {
+    return {
+      statusCode: 400,
+      body: JSON.stringify({
+        error: "Please provide a longer job description.",
+      }),
+    };
   }
 
   const userPrompt = `
-Analyze this job description and suggest CV improvements.
+Analyze this job description and improve the CV.
 
 JOB DESCRIPTION:
-${String(jobDescription).slice(0, 4000)}
+${jobDescription.slice(0, 4000)}
 
 CURRENT CV:
 - Job Title: ${currentCV?.jobTitle || "(not set)"}
 - Objective: ${currentCV?.objective || "(not set)"}
-- Skills: ${Array.isArray(currentCV?.skills) ? currentCV.skills.map((s) => s.name).join(", ") : "(none)"}
-- Experience: ${Array.isArray(currentCV?.experience) ? currentCV.experience.map((e) => `${e.title} at ${e.company}`).join("; ") : "(none)"}
+- Skills: ${
+    Array.isArray(currentCV?.skills)
+      ? currentCV.skills.map((s) => s.name).join(", ")
+      : "(none)"
+  }
+- Experience: ${
+    Array.isArray(currentCV?.experience)
+      ? currentCV.experience.map((e) => `${e.title} at ${e.company}`).join("; ")
+      : "(none)"
+  }
 
-Return ONLY valid JSON (no markdown):
+Return ONLY valid JSON:
 {
-  "suggestedJobTitle": "string",
-  "suggestedObjective": "2-3 sentences, first person, active voice",
-  "matchingSkills": ["up to 8 skills to highlight"],
-  "missingSkills": ["up to 5 skills gaps"],
-  "keywordsToUse": ["6-10 important keywords"],
-  "tips": ["3-4 actionable tips"]
-}`;
+  "suggestedJobTitle": "",
+  "suggestedObjective": "",
+  "matchingSkills": [],
+  "missingSkills": [],
+  "keywordsToUse": [],
+  "tips": []
+}
+`;
 
   try {
-    const raw = await callOpenAI(apiKey, [
-      { role: "system", content: "You are an expert CV writer. Return ONLY valid JSON, no markdown." },
+    const completion = await callOpenAI(apiKey, [
+      {
+        role: "system",
+        content:
+          "You are an expert CV writer. Always return ONLY valid JSON.",
+      },
       { role: "user", content: userPrompt },
     ]);
-    const match = raw.match(/\{[\s\S]*\}/);
-    const parsed = JSON.parse(match ? match[0] : raw);
+
+    const content = completion?.choices?.[0]?.message?.content || "{}";
+
+    let parsed;
+    try {
+      const match = content.match(/\{[\s\S]*\}/);
+      parsed = JSON.parse(match ? match[0] : content);
+    } catch (e) {
+      throw new Error("Invalid JSON returned from OpenAI");
+    }
+
     return {
       statusCode: 200,
       headers: { "Content-Type": "application/json" },
@@ -79,6 +126,14 @@ Return ONLY valid JSON (no markdown):
     };
   } catch (err) {
     console.error("cv-generate error:", err);
-    return { statusCode: 500, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ error: "Failed to generate suggestions. Please try again." }) };
+
+    return {
+      statusCode: 500,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        error: "Failed to generate suggestions. Please try again.",
+        detail: err.message,
+      }),
+    };
   }
 };
